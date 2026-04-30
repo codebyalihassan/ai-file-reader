@@ -1,0 +1,82 @@
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+import uvicorn
+import os
+import sys
+
+# Import the processing logic from the existing script
+try:
+    from qr_from_storage_archive import process_archive_url
+except ImportError:
+    # If the file is in the same directory but not in path
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from qr_from_storage_archive import process_archive_url
+
+app = FastAPI(
+    title="AI File Reader API",
+    description="API to process .ai files from archives and extract QR codes",
+    version="1.0.0"
+)
+
+# Add CORS middleware to allow requests from the frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class UrlRequest(BaseModel):
+    url: str
+
+@app.get("/")
+async def root():
+    return {"message": "AI File Reader API is running. Use /process-archive (GET/POST) with a 'url' parameter."}
+
+@app.get("/process-archive")
+async def read_qr_get(request: Request):
+    # Extract the raw 'url' parameter from the query string to preserve %2F encoding
+    raw_query = request.url.query
+    if not raw_query or 'url=' not in raw_query:
+        raise HTTPException(status_code=400, detail="Missing url parameter")
+    
+    # Everything after 'url=' is our target, but we need to stop at the next & 
+    # that is NOT part of the url itself (though in this case, we want to capture 
+    # everything if the user didn't encode the ampersands).
+    
+    # Split by 'url=' and take the rest
+    parts = raw_query.split('url=', 1)
+    full_url = parts[1]
+    
+    # We NO LONGER unquote here, because we want to preserve internal encoding like %2F
+    # which Firebase requires for object paths.
+    
+    # Log it for debugging
+    print(f"Final Reconstructed URL: {full_url}")
+            
+    try:
+        result = process_archive_url(full_url)
+        return result
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/process-archive")
+async def read_qr_post(request: UrlRequest):
+    if not request.url:
+        raise HTTPException(status_code=400, detail="Missing url parameter")
+    try:
+        result = process_archive_url(request.url)
+        return result
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    # Run the server on port 6969
+    uvicorn.run(app, host="0.0.0.0", port=6969)

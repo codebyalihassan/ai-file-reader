@@ -31,18 +31,11 @@ import zxingcpp
 
 
 def _seven_zip() -> str | None:
-    for name in ("7z", "7z.exe"):
+    # Check for 7z variants in system path (useful for Linux/Render if installed)
+    for name in ("7z", "7za", "7zr", "7z.exe"):
         path = shutil.which(name)
         if path:
             return path
-    for candidate in (
-        Path(r"C:\Program Files\7-Zip\7z.exe"),
-        Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
-        Path(__file__).parent / "7zr.exe",
-        Path(__file__).parent / "7z.exe",
-    ):
-        if candidate.is_file():
-            return str(candidate)
     return None
 
 
@@ -72,7 +65,7 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
             return
         # If 7z fails, try tar as fallback
     
-    # Fallback to Windows built-in tar (bsdtar)
+    # Fallback to system tar
     tar = shutil.which("tar")
     if tar:
         # tar -xf archive -C out_dir
@@ -84,7 +77,7 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
         
     raise RuntimeError(
         f"Failed to extract {archive.name}. "
-        "Please install 7-Zip (https://www.7-zip.org/) or ensure 'tar' can handle this format."
+        "Please install p7zip-full (or 7-Zip) or ensure 'tar' can handle this format."
     )
 
 

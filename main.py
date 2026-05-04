@@ -34,14 +34,14 @@ class UrlRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "AI File Reader API is running. Use /process-archive (GET/POST) with a 'url' parameter."}
+    return {"status": "success", "message": "AI File Reader API is running. Use /run (GET/POST) with a 'url' parameter."}
 
-@app.get("/process-archive")
+@app.get("/run")
 async def read_qr_get(request: Request):
     # Extract the raw 'url' parameter from the query string to preserve %2F encoding
     raw_query = request.url.query
     if not raw_query or 'url=' not in raw_query:
-        raise HTTPException(status_code=400, detail="Missing url parameter")
+        raise HTTPException(status_code=400, detail={"error": "Missing url parameter"})
     
     # Everything after 'url=' is our target, but we need to stop at the next & 
     # that is NOT part of the url itself (though in this case, we want to capture 
@@ -59,24 +59,24 @@ async def read_qr_get(request: Request):
             
     try:
         result = process_archive_url(full_url)
-        return result
+        return {"status": "success", "data": result}
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
-@app.post("/process-archive")
+@app.post("/run")
 async def read_qr_post(request: UrlRequest):
     if not request.url:
-        raise HTTPException(status_code=400, detail="Missing url parameter")
+        raise HTTPException(status_code=400, detail={"error": "Missing url parameter"})
     try:
         result = process_archive_url(request.url)
-        return result
+        return {"status": "success", "data": result}
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 if __name__ == "__main__":
-    # Run the server on port 6969
-    uvicorn.run(app, host="0.0.0.0", port=6969)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

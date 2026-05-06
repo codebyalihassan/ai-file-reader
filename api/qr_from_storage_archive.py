@@ -33,21 +33,30 @@ import zxingcpp
 def _seven_zip() -> str | None:
     # 1. Check for bundled binaries in api/bin (self-contained for Vercel/Local)
     base_dir = Path(__file__).parent
-    bundled_win = base_dir / "bin" / "7za.exe"
-    bundled_linux = base_dir / "bin" / "7za"
     
-    if sys.platform == "win32" and bundled_win.exists():
-        return str(bundled_win)
-    elif sys.platform != "win32" and bundled_linux.exists():
-        # Ensure it's executable on Linux/Vercel
-        try:
-            os.chmod(bundled_linux, 0o755)
-        except Exception:
-            pass
-        return str(bundled_linux)
+    # Prioritize 7zz (Full version that supports RAR)
+    bundled_7zz_win = base_dir / "bin" / "7zz.exe"
+    bundled_7zz_linux = base_dir / "bin" / "7zz"
+    
+    # Fallback to 7za (Archive-only version, no RAR support)
+    bundled_7za_win = base_dir / "bin" / "7za.exe"
+    bundled_7za_linux = base_dir / "bin" / "7za"
+    
+    if sys.platform == "win32":
+        if bundled_7zz_win.exists(): return str(bundled_7zz_win)
+        if bundled_7za_win.exists(): return str(bundled_7za_win)
+    else:
+        # Linux/Vercel
+        target = bundled_7zz_linux if bundled_7zz_linux.exists() else bundled_7za_linux
+        if target.exists():
+            try:
+                os.chmod(target, 0o755)
+            except Exception:
+                pass
+            return str(target)
 
     # 2. Check for 7z variants in system path
-    for name in ("7z", "7za", "7zr", "7z.exe"):
+    for name in ("7zz", "7z", "7za", "7zr", "7z.exe", "7zz.exe"):
         path = shutil.which(name)
         if path:
             return path

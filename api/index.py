@@ -5,6 +5,7 @@ from typing import Optional
 import uvicorn
 import os
 import sys
+from urllib.parse import unquote
 
 # Import the processing logic
 # We prioritize importing from the local api/ directory for Vercel bundling
@@ -50,6 +51,10 @@ async def read_qr_get(request: Request):
     # Split by 'url=' and take the rest
     parts = raw_query.split('url=', 1)
     full_url = parts[1]
+    
+    # We unquote ONCE to turn %3A%2F%2F into :// 
+    # but preserve internal encoding like %2F if it was double-encoded by the client.
+    full_url = unquote(full_url)
     
     # Log it for debugging
     print(f"Final Reconstructed URL: {full_url}")

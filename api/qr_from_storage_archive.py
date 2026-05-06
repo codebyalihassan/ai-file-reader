@@ -31,11 +31,36 @@ import zxingcpp
 
 
 def _seven_zip() -> str | None:
-    # Check for 7z variants in system path (useful for Linux/Render if installed)
+    # 1. Check for bundled binaries in api/bin (self-contained for Vercel/Local)
+    base_dir = Path(__file__).parent
+    bundled_win = base_dir / "bin" / "7za.exe"
+    bundled_linux = base_dir / "bin" / "7za"
+    
+    if sys.platform == "win32" and bundled_win.exists():
+        return str(bundled_win)
+    elif sys.platform != "win32" and bundled_linux.exists():
+        # Ensure it's executable on Linux/Vercel
+        try:
+            os.chmod(bundled_linux, 0o755)
+        except Exception:
+            pass
+        return str(bundled_linux)
+
+    # 2. Check for 7z variants in system path
     for name in ("7z", "7za", "7zr", "7z.exe"):
         path = shutil.which(name)
         if path:
             return path
+    
+    # 3. Check common Windows installation paths
+    windows_paths = [
+        "C:\\Program Files\\7-Zip\\7z.exe",
+        "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+    ]
+    for p in windows_paths:
+        if os.path.exists(p):
+            return p
+            
     return None
 
 
@@ -77,7 +102,8 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
         
     raise RuntimeError(
         f"Failed to extract {archive.name}. "
-        "Please install p7zip-full (or 7-Zip) or ensure 'tar' can handle this format."
+        "The bundled extraction tool (7-Zip) or system 'tar' could not handle this format. "
+        "Ensure the file is a valid archive and not password-protected."
     )
 
 

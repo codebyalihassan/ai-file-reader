@@ -6,18 +6,17 @@ import uvicorn
 import os
 import sys
 
-# Import the processing logic from the existing script
-# On Vercel, we need to add the root directory to sys.path
-root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if root_path not in sys.path:
-    sys.path.append(root_path)
-
+# Import the processing logic
+# We prioritize importing from the local api/ directory for Vercel bundling
 try:
-    from qr_from_storage_archive import process_archive_url
-except ImportError:
-    # Fallback for local development
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-    from qr_from_storage_archive import process_archive_url
+    from .qr_from_storage_archive import process_archive_url
+except (ImportError, ValueError):
+    try:
+        from qr_from_storage_archive import process_archive_url
+    except ImportError:
+        # Fallback for complex environments
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from qr_from_storage_archive import process_archive_url
 
 app = FastAPI(
     title="AI File Reader API",
@@ -48,16 +47,9 @@ async def read_qr_get(request: Request):
     if not raw_query or 'url=' not in raw_query:
         raise HTTPException(status_code=400, detail={"error": "Missing url parameter"})
     
-    # Everything after 'url=' is our target, but we need to stop at the next & 
-    # that is NOT part of the url itself (though in this case, we want to capture 
-    # everything if the user didn't encode the ampersands).
-    
     # Split by 'url=' and take the rest
     parts = raw_query.split('url=', 1)
     full_url = parts[1]
-    
-    # We NO LONGER unquote here, because we want to preserve internal encoding like %2F
-    # which Firebase requires for object paths.
     
     # Log it for debugging
     print(f"Final Reconstructed URL: {full_url}")
@@ -84,4 +76,4 @@ async def read_qr_post(request: UrlRequest):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("index:app", host="0.0.0.0", port=port)

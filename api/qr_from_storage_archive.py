@@ -191,7 +191,7 @@ def process_archive_url(archive_url: str) -> dict[str, Any]:
                 "file_name": name,
                 "sku_name": sku_name,
                 "qr_count": len(qr_codes),
-                "qr_codes": qr_codes,
+                "qr_codes": [{**qr, "file": name} for qr in qr_codes],
             }
     
     # Archive file (RAR/ZIP) — extract and scan all .ai files
@@ -207,28 +207,36 @@ def process_archive_url(archive_url: str) -> dict[str, Any]:
         _extract_archive(archive_path, extract_dir)
 
         ai_files = _iter_ai_files(extract_dir)
-        items: list[dict[str, Any]] = []
+        
+        all_qr_codes: list[dict[str, Any]] = []
+        total_qr_count = 0
 
         for f in ai_files:
             rel = str(f.relative_to(extract_dir)).replace("\\", "/")
-            # Extract SKU name from filename (remove "Order # " prefix and .ai extension)
             sku_name = f.stem
             if sku_name.startswith("Order # "):
-                sku_name = sku_name[8:]  # Remove "Order # " prefix
+                sku_name = sku_name[8:]
             
             qr_codes = _scan_ai_file(f)
-            items.append({
-                "file": rel,
-                "sku_name": sku_name,
-                "qr_count": len(qr_codes),
-                "qr_codes": qr_codes,
-            })
+            total_qr_count += len(qr_codes)
+            for qr in qr_codes:
+                all_qr_codes.append({
+                    "page": qr["page"],
+                    "qr_data": qr["qr_data"],
+                    "file": rel
+                })
+
+        # Archive SKU name from archive filename
+        archive_sku = archive_path.stem
+        if archive_sku.startswith("Order # "):
+            archive_sku = archive_sku[8:]
 
         return {
             "archive_url": archive_url,
-            "archive_name": name,
-            "ai_count": len(items),
-            "items": items,
+            "file_name": name,
+            "sku_name": archive_sku,
+            "qr_count": total_qr_count,
+            "qr_codes": all_qr_codes,
         }
 
 
@@ -266,22 +274,16 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    # Check if direct PDF or archive
-    if "file_name" in result:
-        # Direct PDF
-        print(f"SKU: {result['sku_name']}")
-        print(f"File: {result['file_name']}  ({result['qr_count']} QR codes)\n")
-        for qr in result["qr_codes"]:
-            print(f"  Page {qr['page']}  {qr['qr_data']}")
-    else:
-        # Archive with multiple files
-        print(f"Found {result['ai_count']} .ai file(s).\n")
-        for item in result["items"]:
-            print(f"SKU: {item['sku_name']}")
-            print(f"File: {item['file']}  ({item['qr_count']} QR codes)")
-            for qr in item["qr_codes"]:
-                print(f"  Page {qr['page']}  {qr['qr_data']}")
-            print()
+    # Unified output
+    print(f"URL: {result['archive_url']}")
+    print(f"Source: {result['file_name']}")
+    print(f"SKU: {result['sku_name']}")
+    print(f"Total QR codes: {result['qr_count']}\n")
+    
+    for qr in result["qr_codes"]:
+        file_info = f" ({qr['file']})" if qr.get('file') != result['file_name'] else ""
+        print(f"  Page {qr['page']}  {qr['qr_data']}{file_info}")
+    
     return 0
 
 

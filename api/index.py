@@ -7,10 +7,15 @@ import os
 import sys
 
 # Import the processing logic from the existing script
+# On Vercel, we need to add the root directory to sys.path
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_path not in sys.path:
+    sys.path.append(root_path)
+
 try:
     from qr_from_storage_archive import process_archive_url
 except ImportError:
-    # If the file is in the same directory but not in path
+    # Fallback for local development
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     from qr_from_storage_archive import process_archive_url
 

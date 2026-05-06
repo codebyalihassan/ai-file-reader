@@ -73,6 +73,8 @@ async def read_qr_post(request: UrlRequest):
     if not request.url:
         raise HTTPException(status_code=400, detail={"error": "Missing url parameter"})
     try:
+        print("full_url", request.url)
+
         result = process_archive_url(request.url)
         return {"status": "success", "data": result}
     except Exception as e:

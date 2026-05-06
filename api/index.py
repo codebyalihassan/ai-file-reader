@@ -8,16 +8,16 @@ import sys
 from urllib.parse import unquote
 
 # Import the processing logic
-# We prioritize importing from the local api/ directory for Vercel bundling
+# We add the current directory to sys.path to ensure local imports work on both Vercel and locally
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
 try:
+    from qr_from_storage_archive import process_archive_url
+except ImportError:
+    # Fallback for different execution contexts
     from .qr_from_storage_archive import process_archive_url
-except (ImportError, ValueError):
-    try:
-        from qr_from_storage_archive import process_archive_url
-    except ImportError:
-        # Fallback for complex environments
-        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-        from qr_from_storage_archive import process_archive_url
 
 app = FastAPI(
     title="AI File Reader API",

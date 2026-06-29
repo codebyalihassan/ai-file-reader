@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Download a Firebase Storage (or any HTTP) archive URL, extract .ai files,
-scan each page for QR codes and barcodes using zxing-cpp + PyMuPDF,
+Download a Firebase Storage (or any HTTP) URL, extract .ai/.pdf files from
+archives when needed, scan each page for QR codes using pypdfium2 + zxing-cpp,
 and return results as JSON.
 
-Requires for .rar: 7-Zip installed (https://www.7-zip.org/).
-Install deps: pip install requests pymupdf opencv-contrib-python-headless zxing-cpp
+Supports direct .pdf/.ai links and .zip/.rar/.7z archives.
+Requires for .rar: 7-Zip installed (https://www.7-zip.org/) or api/bin/7zz bundled.
 """
 
 from __future__ import annotations
@@ -137,16 +137,124 @@ def _download(url: str, dest: Path, timeout: int = 120, max_bytes: int | None = 
             raise
 
 
-def _list_ai_members_zip(archive: Path) -> list[str]:
+def _filename_from_content_disposition(content_disposition: str) -> str | None:
+    if not content_disposition:
+        return None
+    match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', content_disposition, re.I)
+    if match:
+        return unquote(match.group(1).strip())
+    return None
+
+
+def _filename_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = unquote(parsed.path)
+    name = Path(path).name
+    if name and name not in {"o", "media"}:
+        return name
+    return "download.bin"
+
+
+def _extension_from_name(name: str) -> str:
+    return Path(name).suffix.lower()
+
+
+def _content_type_from_head(url: str) -> tuple[str | None, str | None]:
+    """Return (content_type, filename_from_headers)."""
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=30)
+        if response.ok:
+            content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            filename = _filename_from_content_disposition(response.headers.get("Content-Disposition", ""))
+            return content_type or None, filename
+    except requests.RequestException:
+        pass
+    return None, None
+
+
+def _sniff_file_kind(path: Path) -> str | None:
+    with path.open("rb") as handle:
+        header = handle.read(8)
+    if header.startswith(b"%PDF"):
+        return "document"
+    if header.startswith(b"PK"):
+        return "zip"
+    if header.startswith(b"Rar!"):
+        return "rar"
+    if header.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "7z"
+    return None
+
+
+def _kind_from_content_type(content_type: str | None) -> str | None:
+    if not content_type:
+        return None
+    if "pdf" in content_type:
+        return "document"
+    if "zip" in content_type:
+        return "zip"
+    if "vnd.rar" in content_type or content_type == "application/x-rar-compressed":
+        return "rar"
+    if "7z" in content_type or content_type == "application/x-7z-compressed":
+        return "7z"
+    return None
+
+
+def _resolve_input_kind(url: str, downloaded: Path | None = None) -> tuple[str, str]:
+    """Return (kind, filename). kind is document | zip | rar | 7z."""
+    name = _filename_from_url(url)
+    ext = _extension_from_name(name)
+    if ext in {".pdf", ".ai"}:
+        return "document", name
+    if ext == ".zip":
+        return "zip", name
+    if ext == ".rar":
+        return "rar", name
+    if ext == ".7z":
+        return "7z", name
+
+    content_type, header_name = _content_type_from_head(url)
+    if header_name:
+        header_ext = _extension_from_name(header_name)
+        if header_ext in {".pdf", ".ai"}:
+            return "document", header_name
+        if header_ext == ".zip":
+            return "zip", header_name
+        if header_ext == ".rar":
+            return "rar", header_name
+        if header_ext == ".7z":
+            return "7z", header_name
+
+    kind = _kind_from_content_type(content_type)
+    if kind == "document":
+        return "document", name if ext else f"{Path(name).stem}.pdf"
+    if kind in {"zip", "rar", "7z"}:
+        return kind, name if ext else f"{Path(name).stem}.{kind}"
+
+    if downloaded is not None and downloaded.exists():
+        sniffed = _sniff_file_kind(downloaded)
+        if sniffed == "document":
+            return "document", name if ext else f"{Path(name).stem}.pdf"
+        if sniffed in {"zip", "rar", "7z"}:
+            return sniffed, name if ext else f"{Path(name).stem}.{sniffed}"
+
+    return "rar", name if ext else "download.rar"
+
+
+def _is_scannable_member(name: str) -> bool:
+    return PurePosixPath(name).suffix.lower() in {".ai", ".pdf"}
+
+
+def _list_scannable_members_zip(archive: Path) -> list[str]:
     with zipfile.ZipFile(archive, "r") as zf:
         return sorted(
             name
             for name in zf.namelist()
-            if not name.endswith("/") and PurePosixPath(name).suffix.lower() == ".ai"
+            if not name.endswith("/") and _is_scannable_member(name)
         )
 
 
-def _list_ai_members_7z(archive: Path, seven: str) -> list[str]:
+def _list_scannable_members_7z(archive: Path, seven: str) -> list[str]:
     proc = subprocess.run(
         [seven, "l", "-slt", str(archive)],
         capture_output=True,
@@ -166,12 +274,12 @@ def _list_ai_members_7z(archive: Path, seven: str) -> list[str]:
         elif stripped.startswith("Folder = +"):
             is_folder = True
         elif stripped == "" and path:
-            if not is_folder and path.lower().endswith(".ai"):
+            if not is_folder and _is_scannable_member(path):
                 members.append(path)
             path = None
             is_folder = False
 
-    if path and not is_folder and path.lower().endswith(".ai"):
+    if path and not is_folder and _is_scannable_member(path):
         members.append(path)
     return sorted(set(members), key=str.lower)
 
@@ -187,7 +295,7 @@ def _clear_dir(path: Path) -> None:
             shutil.rmtree(item, ignore_errors=True)
 
 
-def _extract_ai_member_zip(archive: Path, member: str, out_dir: Path) -> Path:
+def _extract_member_zip(archive: Path, member: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / PurePosixPath(member).name
     with zipfile.ZipFile(archive, "r") as zf, zf.open(member) as src, dest.open("wb") as dst:
@@ -195,7 +303,7 @@ def _extract_ai_member_zip(archive: Path, member: str, out_dir: Path) -> Path:
     return dest
 
 
-def _extract_ai_member_7z(archive: Path, member: str, seven: str, out_dir: Path) -> Path:
+def _extract_member_7z(archive: Path, member: str, seven: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [seven, "x", str(archive), member, f"-o{out_dir}", "-y", "-bb0"],
@@ -205,19 +313,22 @@ def _extract_ai_member_7z(archive: Path, member: str, seven: str, out_dir: Path)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or f"Failed to extract {member}")
 
-    matches = [p for p in out_dir.rglob("*") if p.is_file() and p.suffix.lower() == ".ai"]
+    matches = [
+        p for p in out_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in {".ai", ".pdf"}
+    ]
     if not matches:
         raise RuntimeError(f"Extracted member not found: {member}")
     return matches[0]
 
 
-def _scan_ai_members_from_archive(
+def _scan_members_from_archive(
     archive_path: Path,
     members: list[str],
     *,
     extract_member: Callable[[str, Path], Path],
 ) -> list[dict[str, Any]]:
-    """Extract and scan one .ai file at a time to stay within /tmp limits."""
+    """Extract and scan one .ai/.pdf file at a time to stay within /tmp limits."""
     all_qr_codes: list[dict[str, Any]] = []
     scratch_dir = archive_path.parent / "scratch"
 
@@ -225,7 +336,7 @@ def _scan_ai_members_from_archive(
         _clear_dir(scratch_dir)
         ai_path = extract_member(member, scratch_dir)
         try:
-            qr_codes = _scan_ai_file(ai_path)
+            qr_codes = _scan_document(ai_path)
         finally:
             ai_path.unlink(missing_ok=True)
 
@@ -248,20 +359,20 @@ def _process_archive_file(archive_path: Path, archive_url: str, name: str) -> di
     suffix = archive_path.suffix.lower()
 
     if suffix == ".zip":
-        members = _list_ai_members_zip(archive_path)
+        members = _list_scannable_members_zip(archive_path)
         if not members:
-            raise RuntimeError("No .ai files found in archive")
+            raise RuntimeError("No .ai or .pdf files found in archive")
 
         def extract_member(member: str, out_dir: Path) -> Path:
-            return _extract_ai_member_zip(archive_path, member, out_dir)
+            return _extract_member_zip(archive_path, member, out_dir)
 
     elif seven:
-        members = _list_ai_members_7z(archive_path, seven)
+        members = _list_scannable_members_7z(archive_path, seven)
         if not members:
-            raise RuntimeError("No .ai files found in archive")
+            raise RuntimeError("No .ai or .pdf files found in archive")
 
         def extract_member(member: str, out_dir: Path) -> Path:
-            return _extract_ai_member_7z(archive_path, member, seven, out_dir)
+            return _extract_member_7z(archive_path, member, seven, out_dir)
 
     else:
         raise RuntimeError(
@@ -269,7 +380,7 @@ def _process_archive_file(archive_path: Path, archive_url: str, name: str) -> di
             "Bundle api/bin/7zz for Vercel or install 7-Zip locally."
         )
 
-    all_qr_codes = _scan_ai_members_from_archive(archive_path, members, extract_member=extract_member)
+    all_qr_codes = _scan_members_from_archive(archive_path, members, extract_member=extract_member)
     archive_path.unlink(missing_ok=True)
 
     archive_sku = Path(name).stem
@@ -285,41 +396,67 @@ def _process_archive_file(archive_path: Path, archive_url: str, name: str) -> di
     }
 
 
-def _scan_ai_file(ai_path: Path, max_dpi: int = 100) -> list[dict[str, Any]]:
-    """Scan all pages of a PDF-based .ai file for QR codes only (no barcodes).
-    Uses 100 DPI for fast processing — sufficient for QR detection."""
-    pdf = pdfium.PdfDocument(str(ai_path))
-    seen: set[str] = set()
+def _qr_scan_variants(img: np.ndarray) -> list[np.ndarray]:
+    variants = [img]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    variants.append(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+    sharpened = cv2.addWeighted(
+        gray, 1.5, cv2.GaussianBlur(gray, (0, 0), 3), -0.5, 0
+    )
+    variants.append(cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR))
+    return variants
+
+
+def _read_qr_codes_from_image(img: np.ndarray, seen: set[str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-
-    for page_num in range(len(pdf)):
-        page = pdf[page_num]
-        # Render the page to a bitmap (scale = DPI / 72)
-        bitmap = page.render(scale=max_dpi / 72)
-        pil_image = bitmap.to_pil()
-        # Convert PIL image to numpy array for OpenCV (RGB to BGR)
-        img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-
-        # Fast scan with zxing
-        barcodes = zxingcpp.read_barcodes(img)
-        for b in barcodes:
-            if not b.valid:
+    for variant in _qr_scan_variants(img):
+        for barcode in zxingcpp.read_barcodes(variant):
+            if not barcode.valid:
                 continue
-            # Only QR codes, skip EAN-13 and other barcodes
-            format_str = str(b.format)
-            if "QR" not in format_str.upper():
+            if "QR" not in str(barcode.format).upper():
                 continue
-            key = f"{b.format}:{b.text}"
+            key = f"{barcode.format}:{barcode.text}"
             if key in seen:
                 continue
             seen.add(key)
-            results.append({
-                "page": page_num + 1,
-                "qr_data": b.text,
-            })
-
-    pdf.close()
+            results.append({"qr_data": barcode.text})
     return results
+
+
+def _scan_document(doc_path: Path) -> list[dict[str, Any]]:
+    """Scan all pages of a PDF or PDF-based .ai file for QR codes."""
+    pdf = pdfium.PdfDocument(str(doc_path))
+    seen: set[str] = set()
+    results: list[dict[str, Any]] = []
+    dpis = (150, 200, 300)
+
+    try:
+        for page_num in range(len(pdf)):
+            page = pdf[page_num]
+            page_results: list[dict[str, Any]] = []
+
+            for dpi in dpis:
+                bitmap = page.render(scale=dpi / 72)
+                pil_image = bitmap.to_pil()
+                img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                page_results = _read_qr_codes_from_image(img, seen)
+                if page_results:
+                    break
+
+            for qr in page_results:
+                results.append({
+                    "page": page_num + 1,
+                    "qr_data": qr["qr_data"],
+                })
+    finally:
+        pdf.close()
+
+    return results
+
+
+def _scan_ai_file(doc_path: Path, max_dpi: int = 100) -> list[dict[str, Any]]:
+    """Backward-compatible alias."""
+    return _scan_document(doc_path)
 
 
 def process_archive_url(archive_url: str) -> dict[str, Any]:
@@ -327,26 +464,27 @@ def process_archive_url(archive_url: str) -> dict[str, Any]:
     max_bytes = _max_archive_bytes()
 
     print("Archive URL: ", archive_url)
-    parsed = urlparse(archive_url)
-    name = Path(unquote(parsed.path)).name or "download.bin"
-
-    # Check if it's a direct PDF/AI file
-    is_direct_pdf = re.search(r"\.(pdf|ai)$", name, re.I) is not None
-
-    print("is_direct_pdf: ", is_direct_pdf)
+    kind_hint, name = _resolve_input_kind(archive_url)
+    print("detected kind:", kind_hint, "filename:", name)
 
     with tempfile.TemporaryDirectory(prefix="ai_qr_", dir=str(_tmp_root())) as tmp:
         tmp_path = Path(tmp)
+        download_path = tmp_path / name
+        _download(archive_url, download_path, max_bytes=max_bytes)
 
-        if is_direct_pdf:
-            file_path = tmp_path / name
-            _download(archive_url, file_path, max_bytes=max_bytes)
+        kind, resolved_name = _resolve_input_kind(archive_url, download_path)
+        if resolved_name != name:
+            resolved_path = tmp_path / resolved_name
+            download_path.replace(resolved_path)
+            download_path = resolved_path
+            name = resolved_name
 
-            sku_name = file_path.stem
+        if kind == "document":
+            sku_name = Path(name).stem
             if sku_name.startswith("Order # "):
                 sku_name = sku_name[8:]
 
-            qr_codes = _scan_ai_file(file_path)
+            qr_codes = _scan_document(download_path)
 
             return {
                 "archive_url": archive_url,
@@ -356,12 +494,7 @@ def process_archive_url(archive_url: str) -> dict[str, Any]:
                 "qr_codes": [{**qr, "file": name} for qr in qr_codes],
             }
 
-        if not re.search(r"\.(zip|rar|7z)$", name, re.I):
-            name = "download.rar"
-
-        archive_path = tmp_path / name
-        _download(archive_url, archive_path, max_bytes=max_bytes)
-        return _process_archive_file(archive_path, archive_url, name)
+        return _process_archive_file(download_path, archive_url, name)
 
 
 def main() -> int:

@@ -21,7 +21,7 @@ except ImportError:
 
 app = FastAPI(
     title="AI File Reader API",
-    description="API to process .ai files from archives and extract QR codes",
+    description="API to process .ai/.pdf files from URLs or archives and extract QR codes",
     version="1.0.0"
 )
 

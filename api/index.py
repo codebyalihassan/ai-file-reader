@@ -66,7 +66,8 @@ async def read_qr_get(request: Request):
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+        status = 413 if "Storage limit" in str(e) or "too large" in str(e).lower() else 500
+        raise HTTPException(status_code=status, detail={"error": str(e)})
 
 @app.post("/run")
 async def read_qr_post(request: UrlRequest):
@@ -80,7 +81,8 @@ async def read_qr_post(request: UrlRequest):
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+        status = 413 if "Storage limit" in str(e) or "too large" in str(e).lower() else 500
+        raise HTTPException(status_code=status, detail={"error": str(e)})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

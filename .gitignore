@@ -8,3 +8,8 @@ ENV/
 .vscode/
 .idea/
 node_modules/
+
+api/bin/7za.exe
+api/bin/7zz
+api/bin/7za
+7zr.exe
